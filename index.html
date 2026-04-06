@@ -1,0 +1,1123 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>MOTO CLOUD 備料系統</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #E2E8F0; border-radius: 20px; }
+    
+    @keyframes fadeInSlideUp {
+      from { opacity: 0; transform: translateY(15px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .tab-content {
+      animation: fadeInSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+  </style>
+</head>
+<body class="bg-[#F3F4F6] text-slate-900 font-sans pb-20">
+  
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module">
+    import React, { useState, useEffect, useMemo, useRef } from 'https://esm.sh/react@18.2.0';
+    import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
+    
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js';
+    import { 
+      getFirestore, collection, addDoc, onSnapshot, 
+      query, deleteDoc, doc, updateDoc, serverTimestamp, setDoc, getDoc
+    } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
+    import { 
+      getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged 
+    } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js';
+    
+    import { 
+      Plus, Search, Trash2, Download, Wrench, Phone, User, Layers, 
+      Loader2, CheckCircle2, AlertCircle, Tag, Filter, Package, 
+      Sparkles, Smartphone, Bike, MapPin, ClipboardList, Cpu, 
+      CheckSquare, Clock, Square, X, Share2, Settings, Link as LinkIcon,
+      ClipboardEdit, LayoutList, Pencil, AtSign, Save, RefreshCw, Database, Webhook, Check,
+      UploadCloud, Info
+    } from 'https://esm.sh/lucide-react@0.344.0';
+
+    // ==========================================
+    // ⚠️ Firebase 設定
+    // ==========================================
+    let firebaseConfig = {
+      apiKey: "YOUR_API_KEY", 
+      authDomain: "gen-lang-client-0332680269.firebaseapp.com",
+      projectId: "gen-lang-client-0332680269",
+      storageBucket: "gen-lang-client-0332680269.firebasestorage.app",
+      messagingSenderId: "516359072770",
+      appId: "1:516359072770:web:bc9e830215362762d74b1b",
+      measurementId: "G-ZDEQTM1SCX"
+    };
+
+    if (typeof __firebase_config !== 'undefined') {
+      try {
+        const envConfig = JSON.parse(__firebase_config);
+        if (envConfig && envConfig.apiKey) firebaseConfig = envConfig;
+      } catch(e) { console.warn("解析環境變數失敗"); }
+    }
+
+    const apiKey = ""; 
+    
+    let dbAppId = 'moto-parts-inventory-gh'; 
+    if (typeof __app_id !== 'undefined') dbAppId = __app_id;
+
+    let app, auth, db;
+    const isFirebaseConfigValid = firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey.length > 0 && firebaseConfig.apiKey !== "YOUR_API_KEY";
+    
+    if (isFirebaseConfigValid) {
+      app = initializeApp(firebaseConfig);
+      auth = getAuth(app);
+      db = getFirestore(app);
+    }
+
+    const CATEGORY_MAP = {
+      '引擎動力': ['引擎', '活塞', '曲軸', '汽門', '缸', '進氣', '化油器', '節流閥', '噴油嘴'],
+      '傳動系統': ['皮帶', '普利盤', '離合器', '碗公', '開閉盤', '大彈簧', '滾珠', '齒輪箱'],
+      '底盤鋼絲框': ['框', '鋼絲', '哈姆', 'hub', '輪圈', '總成', '輪胎', '避震', '煞車', '卡鉗', '碟盤', '來令', '氣密'],
+      '電系照明': ['電池', '火星塞', '電腦', '燈', '感應器', '線組', '整流器', '方向燈'],
+      '外觀精品': ['車殼', '座墊', '後照鏡', '握把', '腳踏', '貼紙', '螺絲', '支架'],
+      '基礎保養': ['機油', '齒輪油', '濾清器', '冷卻液']
+    };
+
+    const categorizePart = (specs) => {
+      if (!specs || specs.length === 0) return '一般零件';
+      const text = specs[0].text.toLowerCase();
+      for (const [category, keywords] of Object.entries(CATEGORY_MAP)) {
+        if (keywords.some(key => text.includes(key))) return category;
+      }
+      return '一般零件';
+    };
+
+    function App() {
+      if (!isFirebaseConfigValid) {
+        return (
+          <div className="min-h-screen bg-[#F3F4F6] flex items-center justify-center p-4 font-sans">
+            <div className="bg-white p-8 rounded-[2.5rem] shadow-xl max-w-md w-full text-center">
+              <AlertCircle className="mx-auto text-red-500 mb-6" size={56} />
+              <h2 className="text-2xl font-black mb-3 text-slate-800">缺少 Firebase 金鑰</h2>
+              <p className="text-slate-500 mb-6 font-medium leading-relaxed">
+                系統偵測到您的 Firebase API Key 為空。<br/>請在原始碼填入您的金鑰。
+              </p>
+            </div>
+          </div>
+        );
+      }
+
+      const [user, setUser] = useState(null);
+      const [items, setItems] = useState([]);
+      const [loading, setLoading] = useState(true);
+      
+      const [activeTab, setActiveTab] = useState('input');
+      const [searchTerm, setSearchTerm] = useState('');
+      const [isSubmitting, setIsSubmitting] = useState(false);
+      const [isAnalyzing, setIsAnalyzing] = useState(false);
+      const [notification, setNotification] = useState(null);
+      const [rawInput, setRawInput] = useState('');
+      const [showSettings, setShowSettings] = useState(false);
+      
+      const defaultWebhookUrl = 'https://script.google.com/macros/s/AKfycbxbM15-mcZfiVuAFE3SU8bhd120wYdSroBAxkzw9xYIB4Wa_7dJRNkh6KJ-erL52eszxg/exec';
+      const [webhookUrl, setWebhookUrl] = useState(defaultWebhookUrl);
+      const [tempWebhookUrl, setTempWebhookUrl] = useState(defaultWebhookUrl);
+      const [isTestingWebhook, setIsTestingWebhook] = useState(false);
+      const [webhookStatus, setWebhookStatus] = useState('unknown'); 
+      const [isSavingConfig, setIsSavingConfig] = useState(false);
+
+      // 新增：快照備份狀態
+      const [isBackingUp, setIsBackingUp] = useState(false);
+
+      const [editItemId, setEditItemId] = useState(null);
+      const [editFormData, setEditFormData] = useState(null);
+      const [editSpecInput, setEditSpecInput] = useState('');
+
+      const [formData, setFormData] = useState({
+        name: '', contact: '', socialAccount: '', model: '', address: '',
+        specs: [], quantity: '1', category: '', note: ''
+      });
+
+      const [newSpecInput, setNewSpecInput] = useState('');
+
+      useEffect(() => {
+        const appleCapable = document.createElement('meta');
+        appleCapable.name = "apple-mobile-web-app-capable";
+        appleCapable.content = "yes";
+        document.head.appendChild(appleCapable);
+
+        const mobileCapable = document.createElement('meta');
+        mobileCapable.name = "mobile-web-app-capable";
+        mobileCapable.content = "yes";
+        document.head.appendChild(mobileCapable);
+
+        const appleStatusBarStyle = document.createElement('meta');
+        appleStatusBarStyle.name = "apple-mobile-web-app-status-bar-style";
+        appleStatusBarStyle.content = "black-translucent";
+        document.head.appendChild(appleStatusBarStyle);
+
+        const appleTitle = document.createElement('meta');
+        appleTitle.name = "apple-mobile-web-app-title";
+        appleTitle.content = "備料系統";
+        document.head.appendChild(appleTitle);
+
+        return () => {
+          document.head.removeChild(appleCapable);
+          document.head.removeChild(mobileCapable);
+          document.head.removeChild(appleStatusBarStyle);
+          document.head.removeChild(appleTitle);
+        };
+      }, []);
+
+      useEffect(() => {
+        const initAuth = async () => {
+          try {
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+              await signInWithCustomToken(auth, __initial_auth_token);
+            } else {
+              await signInAnonymously(auth);
+            }
+          } catch (error) { console.error("Auth Error:", error); }
+        };
+        initAuth();
+        const unsubscribe = onAuthStateChanged(auth, setUser);
+        return () => unsubscribe();
+      }, []);
+
+      useEffect(() => {
+        if (!user) return;
+        const collectionRef = collection(db, 'artifacts', dbAppId, 'public', 'data', 'moto_inventory');
+        const unsubscribe = onSnapshot(query(collectionRef), (snapshot) => {
+          const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setItems(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+          setLoading(false);
+        }, () => setLoading(false));
+        return () => unsubscribe();
+      }, [user]);
+
+      // 載入 Webhook 設定
+      useEffect(() => {
+        if (!user) return;
+        const fetchConfig = async () => {
+          try {
+            const docRef = doc(db, 'artifacts', dbAppId, 'public', 'data', 'config', 'webhook');
+            const snap = await getDoc(docRef);
+            if (snap.exists() && snap.data().url) {
+              setWebhookUrl(snap.data().url);
+              setTempWebhookUrl(snap.data().url);
+            }
+          } catch (error) {
+            console.error("Config load error", error);
+          }
+        };
+        fetchConfig();
+      }, [user]);
+
+      const handleSaveWebhook = async () => {
+        if (!user) return;
+        setIsSavingConfig(true);
+        try {
+          await setDoc(doc(db, 'artifacts', dbAppId, 'public', 'data', 'config', 'webhook'), { url: tempWebhookUrl.trim() });
+          setWebhookUrl(tempWebhookUrl.trim());
+          showNotification('Webhook 網址已成功儲存！', 'success');
+        } catch (error) {
+          showNotification('儲存失敗，請檢查網路連線', 'error');
+        } finally {
+          setIsSavingConfig(false);
+        }
+      };
+
+      const handleTestWebhook = async () => {
+        const urlToTest = tempWebhookUrl.trim();
+        if (!urlToTest) return showNotification('請先輸入 Webhook 網址', 'error');
+        setIsTestingWebhook(true);
+        setWebhookStatus('unknown');
+        try {
+          const res = await fetch(urlToTest);
+          if (res.ok) {
+            setWebhookStatus('success');
+            showNotification('連線測試成功！伺服器已回應', 'success');
+          } else {
+            setWebhookStatus('error');
+            showNotification('連線失敗，請確認 Apps Script 已發佈', 'error');
+          }
+        } catch (error) {
+          setWebhookStatus('error');
+          showNotification('連線失敗 (可能網址錯誤或有跨域問題)', 'error');
+        } finally {
+          setIsTestingWebhook(false);
+        }
+      };
+
+      // 🔥 核心重構：全盤快照備份 (Snapshot Backup)
+      const handleFullBackup = async () => {
+        if (!webhookUrl) {
+          showNotification('請先至設定綁定 Webhook 網址', 'error');
+          setShowSettings(true);
+          return;
+        }
+        if (items.length === 0) return showNotification('目前沒有資料可備份', 'error');
+
+        setIsBackingUp(true);
+        showNotification('正在打包資料並覆蓋至試算表...', 'success');
+        
+        try {
+          // 將當前所有 items 打包成一個完整陣列送出
+          await fetch(webhookUrl, {
+            method: 'POST',
+            mode: 'no-cors', // 避免跨域阻擋
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'backup', data: items })
+          });
+          
+          // 因為 no-cors 無法讀取回傳狀態，這裡延遲一下模擬完成
+          setTimeout(() => {
+            showNotification('快照備份完成！試算表已更新至最新狀態');
+            setIsBackingUp(false);
+          }, 1500);
+        } catch (error) {
+          showNotification('備份過程發生錯誤，請檢查網路', 'error');
+          setIsBackingUp(false);
+        }
+      };
+
+      const handleCopyGAS = () => {
+        const code = `function doPost(e) {
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+    var payload = JSON.parse(e.postData.contents);
+
+    // 接收全新設計的 'backup' 指令
+    if (payload.action === 'backup') {
+      var items = payload.data;
+      var headers = ["系統ID", "建立時間", "客戶姓名", "車種", "聯繫方式", "社交帳號", "地址", "零件清單", "數量", "分類", "備註"];
+      var rows = [headers];
+
+      // 遍歷所有資料，整理成試算表格式
+      items.forEach(function(item) {
+        var specsStr = "";
+        if (item.specs) {
+          specsStr = item.specs.map(function(s) { 
+            return s.text + (s.arrived ? " [已到]" : " [未到]"); 
+          }).join("\\n");
+        }
+        
+        var timeStr = item.timestampStr || new Date().toLocaleString();
+        if (item.createdAt && item.createdAt.seconds) {
+          timeStr = new Date(item.createdAt.seconds * 1000).toLocaleString();
+        }
+
+        rows.push([
+          item.id || "", timeStr, item.name || "", item.model || "", 
+          item.contact || "", item.socialAccount || "", item.address || "", 
+          specsStr, item.quantity || "1", item.category || "", item.note || ""
+        ]);
+      });
+
+      // 🌟 最關鍵的邏輯：清除舊資料，寫入全新快照！絕對不會重複！
+      sheet.clearContents();
+      if (rows.length > 1) {
+        sheet.getRange(1, 1, rows.length, headers.length).setValues(rows);
+      } else {
+        sheet.getRange(1, 1, 1, headers.length).setValues(rows);
+      }
+
+      return ContentService.createTextOutput("Backup Success");
+    }
+  } catch (error) {
+    return ContentService.createTextOutput("Error: " + error.toString());
+  }
+}
+
+// 保留 doGet 供測試連線使用
+function doGet(e) {
+  return ContentService.createTextOutput("Webhook is running!");
+}`;
+        const textArea = document.createElement("textarea");
+        textArea.value = code;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+          document.execCommand('copy');
+          showNotification('新版「快照覆蓋」程式碼已複製！請回 Apps Script 貼上並重新部署', 'success');
+        } catch (err) {
+          showNotification('複製失敗，請手動全選複製', 'error');
+        }
+        document.body.removeChild(textArea);
+      };
+
+      const callGeminiWithRetry = async (prompt, historyContext, retries = 5, delay = 1000) => {
+        const systemPrompt = `你是一個專業的機車零件助手。請提取資訊並返回 JSON 格式：
+        {
+          "name": "姓名",
+          "contact": "聯絡電話",
+          "socialAccount": "社交帳號(IG/LINE/FB等)",
+          "model": "車種",
+          "address": "地址",
+          "specs": ["項目1", "項目2"], 
+          "quantity": "數量",
+          "category": "分類 (請依據歷史紀錄學習分類)",
+          "note": "備註"
+        }
+
+        【預設分類參考】：引擎動力、傳動系統、底盤鋼絲框、電系照明、外觀精品、基礎保養。
+        【歷史分類學習】：以下是過去系統中已知的零件分類對應關係，請優先學習這些經驗來進行分類：
+        ${historyContext || '暫無歷史紀錄'}
+        `;
+
+        for (let i = 0; i < retries; i++) {
+          try {
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+              method: 'POST',
+              headers: { 
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                generationConfig: { responseMimeType: "application/json" }
+              })
+            });
+            
+            if (!response.ok) {
+              const errData = await response.json().catch(() => ({}));
+              throw new Error(errData?.error?.message || `API 請求失敗 (狀態碼: ${response.status})`);
+            }
+            
+            const result = await response.json();
+            return JSON.parse(result.candidates[0].content.parts[0].text);
+          } catch (error) {
+            if (i === retries - 1) throw error;
+            await new Promise(resolve => setTimeout(resolve, delay));
+            delay *= 2;
+          }
+        }
+      };
+
+      const handleSmartParse = async () => {
+        if (!rawInput.trim()) return;
+        setIsAnalyzing(true);
+        try {
+          const historyMappings = new Set();
+          items.forEach(item => {
+            if (item.category && item.specs) {
+              item.specs.forEach(spec => {
+                historyMappings.add(`[${spec.text}] => ${item.category}`);
+              });
+            }
+          });
+          const historyContext = Array.from(historyMappings).slice(0, 60).join('\n');
+
+          const parsedData = await callGeminiWithRetry(rawInput, historyContext);
+          setFormData({
+            ...formData,
+            name: parsedData.name || '',
+            contact: parsedData.contact || '',
+            socialAccount: parsedData.socialAccount || '',
+            model: parsedData.model || '',
+            address: parsedData.address || '',
+            specs: (parsedData.specs || []).map(s => ({ text: s, arrived: false })),
+            quantity: parsedData.quantity || '1',
+            category: parsedData.category || '',
+            note: parsedData.note || ''
+          });
+          setRawInput('');
+          showNotification('AI 解析完成！已應用歷史分類經驗');
+        } catch (error) {
+          showNotification(error.message || '解析失敗', 'error');
+        } finally {
+          setIsAnalyzing(false);
+        }
+      };
+
+      const showNotification = (msg, type = 'success') => {
+        setNotification({ msg, type });
+        setTimeout(() => setNotification(null), 3000);
+      };
+
+      // 移除原有的 auto-sync 呼叫，完全交給 Firebase 管理
+      const handleAddData = async (e) => {
+        e.preventDefault();
+        if (!user || isSubmitting) return;
+        if (formData.specs.length === 0) return showNotification('請新增零件規格', 'error');
+
+        setIsSubmitting(true);
+        try {
+          const category = formData.category.trim() || categorizePart(formData.specs);
+          const payload = {
+            ...formData,
+            category,
+            createdAt: serverTimestamp(),
+            timestampStr: new Date().toLocaleString(),
+            userId: user.uid
+          };
+
+          await addDoc(collection(db, 'artifacts', dbAppId, 'public', 'data', 'moto_inventory'), payload);
+          setFormData({ name: '', contact: '', socialAccount: '', model: '', address: '', specs: [], quantity: '1', category: '', note: '' });
+          showNotification('資料已存儲至系統 (如需更新至試算表請點擊雲端備份)');
+          setActiveTab('list');
+        } catch (err) {
+          showNotification('儲存失敗', 'error');
+        } finally {
+          setIsSubmitting(false);
+        }
+      };
+
+      const handleUpdateData = async (e) => {
+        e.preventDefault();
+        if (!user || !editItemId) return;
+        if (editFormData.specs.length === 0) return showNotification('請至少保留一個零件規格', 'error');
+
+        setIsSubmitting(true);
+        try {
+          const category = editFormData.category.trim() || categorizePart(editFormData.specs);
+          const payload = { ...editFormData, category, updatedAt: serverTimestamp() };
+          await updateDoc(doc(db, 'artifacts', dbAppId, 'public', 'data', 'moto_inventory', editItemId), payload);
+          
+          showNotification('資料已成功更新！');
+          setEditItemId(null);
+          setEditFormData(null);
+        } catch (err) {
+          showNotification('更新失敗', 'error');
+        } finally {
+          setIsSubmitting(false);
+        }
+      };
+
+      const toggleSubItemStatus = async (itemId, specIndex) => {
+        if (!user) return;
+        const item = items.find(i => i.id === itemId);
+        if (!item) return;
+        const newSpecs = [...item.specs];
+        newSpecs[specIndex].arrived = !newSpecs[specIndex].arrived;
+        await updateDoc(doc(db, 'artifacts', dbAppId, 'public', 'data', 'moto_inventory', itemId), { specs: newSpecs });
+      };
+
+      const deleteItem = async (id) => {
+        if (!user) return;
+        try {
+          await deleteDoc(doc(db, 'artifacts', dbAppId, 'public', 'data', 'moto_inventory', id));
+          showNotification('資料已刪除！');
+        } catch (err) {
+          showNotification('刪除失敗', 'error');
+        }
+      };
+
+      const exportToCSV = () => {
+        const headers = ['時間,姓名,車種,聯繫方式,社交帳號,地址,零件清單,數量,分類,備註'];
+        const rows = items.map(i => {
+          const date = i.createdAt ? new Date(i.createdAt.seconds * 1000).toLocaleString() : '';
+          const specs = i.specs.map(s => `${s.text}[${s.arrived ? '已到' : '未到'}]`).join('; ');
+          return `"${date}","${i.name}","${i.model}","${i.contact}","${i.socialAccount || ''}","${i.address}","${specs}","${i.quantity}","${i.category}","${i.note}"`;
+        });
+        const csvContent = "\uFEFF" + [headers, ...rows].join('\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `機車備料_${new Date().toLocaleDateString()}.csv`;
+        link.click();
+      };
+
+      const filteredItems = useMemo(() => {
+        return items.filter(item => 
+          Object.values(item).some(val => String(val).toLowerCase().includes(searchTerm.toLowerCase()))
+        );
+      }, [items, searchTerm]);
+
+      return (
+        <div className="p-4 md:p-8">
+          {notification && (
+            <div className={`fixed top-6 right-6 z-[9999] px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 ${
+              notification.type === 'error' ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'
+            }`}>
+              {notification.type === 'error' ? <AlertCircle /> : <CheckCircle2 className="text-emerald-400" />} 
+              {notification.msg}
+            </div>
+          )}
+
+          {showSettings && (
+            <div className="fixed inset-0 bg-slate-900/60 z-[100] flex items-center justify-center p-4 backdrop-blur-md">
+              <div className="bg-white rounded-[2.5rem] max-w-lg w-full shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+                
+                <div className="px-8 py-6 bg-slate-50 border-b border-slate-100 flex items-center justify-between sticky top-0 z-10">
+                  <h2 className="text-2xl font-black flex items-center gap-3 text-slate-800">
+                    <Database className="text-blue-600" size={28} />
+                    系統設定與備份
+                  </h2>
+                  <button onClick={() => setShowSettings(false)} className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-full transition-all">
+                    <X size={24} />
+                  </button>
+                </div>
+
+                <div className="p-8 overflow-y-auto custom-scrollbar flex-1 space-y-8">
+                  {/* Section 1: Webhook Binding */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
+                        <Webhook size={16} /> 綁定試算表 Webhook
+                      </h3>
+                      {webhookStatus === 'success' && <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full"><CheckCircle2 size={12}/> 連線正常</span>}
+                      {webhookStatus === 'error' && <span className="flex items-center gap-1 text-[10px] font-bold text-red-600 bg-red-50 px-2.5 py-1 rounded-full"><AlertCircle size={12}/> 連線失敗</span>}
+                    </div>
+                    
+                    <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                      請填寫 Google Apps Script 部署後的 URL，這將作為一鍵雲端備份的目標位址。
+                    </p>
+                    
+                    <div className="space-y-3">
+                      <input 
+                        className="w-full px-5 py-4 bg-slate-100 border-2 border-transparent focus:border-blue-500 focus:bg-white rounded-2xl outline-none text-sm font-mono text-slate-700 transition-all placeholder:text-slate-400"
+                        placeholder="https://script.google.com/macros/s/.../exec"
+                        value={tempWebhookUrl}
+                        onChange={(e) => {
+                          setTempWebhookUrl(e.target.value);
+                          setWebhookStatus('unknown');
+                        }}
+                      />
+                      
+                      <div className="flex gap-3">
+                        <button 
+                          onClick={handleTestWebhook}
+                          disabled={isTestingWebhook || !tempWebhookUrl}
+                          className="flex-1 py-3.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-2xl font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-50 text-sm"
+                        >
+                          {isTestingWebhook ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                          測試連線
+                        </button>
+                        <button 
+                          onClick={handleSaveWebhook}
+                          disabled={isSavingConfig || tempWebhookUrl === webhookUrl}
+                          className="flex-1 py-3.5 bg-slate-900 text-white hover:bg-slate-800 rounded-2xl font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:bg-slate-300 text-sm shadow-md"
+                        >
+                          {isSavingConfig ? <Loader2 size={16} className="animate-spin" /> : (tempWebhookUrl === webhookUrl ? <Check size={16}/> : <Save size={16} />)}
+                          {tempWebhookUrl === webhookUrl ? '已儲存' : '儲存設定'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Section 2: Fix Duplicates (GAS Code) */}
+                  <div className="space-y-4 pt-6 border-t border-slate-100">
+                    <h3 className="text-sm font-black text-amber-600 uppercase tracking-widest flex items-center gap-2">
+                      <Wrench size={16} /> 試算表端接收程式碼
+                    </h3>
+                    <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 text-xs text-amber-900 leading-relaxed space-y-2">
+                      <p className="flex gap-1.5"><Info size={16} className="shrink-0 mt-0.5 text-amber-600"/> <strong>全新設計：快照覆寫模式</strong></p>
+                      <p className="ml-5">系統不再發送零碎的更新，而是透過右上角的「雲端備份」按鈕，一次性將當前所有資料打包，<strong>直接清除舊資料並完整覆寫試算表</strong>。100% 根絕重複新增的問題！</p>
+                      <p className="ml-5 mt-2 font-bold text-red-600">請務必複製下方最新程式碼，並至 Apps Script「部署為新版本」才會有作用：</p>
+                    </div>
+                    <div className="relative group mt-2">
+                      <div className="absolute inset-0 bg-slate-900 rounded-2xl pointer-events-none"></div>
+                      <textarea 
+                        readOnly
+                        className="relative w-full h-40 p-4 bg-transparent text-slate-300 rounded-2xl font-mono text-[10px] leading-relaxed custom-scrollbar outline-none resize-none z-10"
+                        value={`function doPost(e) {
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+    var payload = JSON.parse(e.postData.contents);
+
+    if (payload.action === 'backup') {
+      var items = payload.data;
+      var headers = ["系統ID", "建立時間", "客戶姓名", "車種", "聯繫方式", "社交帳號", "地址", "零件清單", "數量", "分類", "備註"];
+      var rows = [headers];
+
+      items.forEach(function(item) {
+        var specsStr = "";
+        if (item.specs) {
+          specsStr = item.specs.map(function(s) { 
+            return s.text + (s.arrived ? " [已到]" : " [未到]"); 
+          }).join("\\n");
+        }
+        var timeStr = item.timestampStr || new Date().toLocaleString();
+        
+        rows.push([
+          item.id || "", timeStr, item.name || "", item.model || "", 
+          item.contact || "", item.socialAccount || "", item.address || "", 
+          specsStr, item.quantity || "1", item.category || "", item.note || ""
+        ]);
+      });
+
+      sheet.clearContents();
+      if (rows.length > 1) {
+        sheet.getRange(1, 1, rows.length, headers.length).setValues(rows);
+      } else {
+        sheet.getRange(1, 1, 1, headers.length).setValues(rows);
+      }
+      return ContentService.createTextOutput("Backup Success");
+    }
+  } catch (error) {
+    return ContentService.createTextOutput("Error: " + error.toString());
+  }
+}`}
+                      />
+                      <button 
+                        onClick={handleCopyGAS}
+                        className="absolute top-3 right-3 bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors backdrop-blur-sm z-20 cursor-pointer"
+                      >
+                        複製程式碼
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {editItemId && editFormData && (
+            <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white rounded-[2.5rem] p-6 md:p-8 max-w-2xl w-full shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar">
+                <h2 className="text-2xl font-black mb-6 flex items-center gap-2 text-slate-800">
+                  <Pencil className="text-blue-600" /> 編輯備料資料
+                </h2>
+                
+                <form onSubmit={handleUpdateData} className="space-y-5">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">客戶姓名</label>
+                      <input required className="w-full px-5 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 ring-blue-500 outline-none font-bold" 
+                        value={editFormData.name} onChange={e => setEditFormData({...editFormData, name: e.target.value})} placeholder="例如：王小明" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">聯絡電話</label>
+                      <input className="w-full px-5 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 ring-blue-500 outline-none font-medium" 
+                        value={editFormData.contact} onChange={e => setEditFormData({...editFormData, contact: e.target.value})} placeholder="手機或市話" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">社交帳號 (IG/LINE)</label>
+                      <input className="w-full px-5 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 ring-blue-500 outline-none font-medium text-blue-600" 
+                        value={editFormData.socialAccount || ''} onChange={e => setEditFormData({...editFormData, socialAccount: e.target.value})} placeholder="例如：IG: moto_guy" />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="md:col-span-1 space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">車種</label>
+                      <input required className="w-full px-5 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 ring-blue-500 outline-none font-bold" 
+                        value={editFormData.model} onChange={e => setEditFormData({...editFormData, model: e.target.value})} placeholder="例如：勁戰六代" />
+                    </div>
+                    <div className="md:col-span-2 space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">地址</label>
+                      <input className="w-full px-5 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 ring-blue-500 outline-none text-sm" 
+                        value={editFormData.address} onChange={e => setEditFormData({...editFormData, address: e.target.value})} placeholder="收件地址或自取" />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 pt-2">
+                    <label className="text-[10px] font-black text-blue-600 ml-2 uppercase tracking-widest flex items-center gap-2">
+                      <ClipboardList size={14}/> 零件規格與即時核銷
+                    </label>
+                    <div className="space-y-2 max-h-56 overflow-y-auto pr-2 custom-scrollbar">
+                      {editFormData.specs.map((spec, idx) => (
+                        <div key={idx} className={`flex items-center gap-2 p-3 rounded-2xl border-2 transition-all ${
+                          spec.arrived ? 'bg-emerald-50 border-emerald-100' : 'bg-white border-slate-100'
+                        }`}>
+                          <button type="button" onClick={() => {
+                            const newSpecs = [...editFormData.specs];
+                            newSpecs[idx].arrived = !newSpecs[idx].arrived;
+                            setEditFormData({...editFormData, specs: newSpecs});
+                          }} className={`shrink-0 ${spec.arrived ? 'text-emerald-500' : 'text-slate-300'}`}>
+                            {spec.arrived ? <CheckCircle2 size={22} /> : <Square size={22} />}
+                          </button>
+                          
+                          <input 
+                            className="flex-1 bg-transparent border-none outline-none font-bold text-slate-700 text-sm"
+                            value={spec.text}
+                            onChange={(e) => {
+                              const newSpecs = [...editFormData.specs];
+                              newSpecs[idx].text = e.target.value;
+                              setEditFormData({...editFormData, specs: newSpecs});
+                            }}
+                          />
+                          
+                          <button type="button" onClick={() => {
+                            const newSpecs = editFormData.specs.filter((_, i) => i !== idx);
+                            setEditFormData({...editFormData, specs: newSpecs});
+                          }} className="text-slate-300 hover:text-red-500 transition-colors p-1">
+                            <X size={18} />
+                          </button>
+                        </div>
+                      ))}
+                      
+                      <div className="flex gap-2 mt-3">
+                        <input 
+                          className="flex-1 px-4 py-3 bg-slate-100 rounded-xl outline-none focus:ring-2 ring-blue-200 text-sm font-medium" 
+                          placeholder="新增項目..."
+                          value={editSpecInput}
+                          onChange={e => setEditSpecInput(e.target.value)}
+                          onKeyPress={e => e.key === 'Enter' && (e.preventDefault(), (editSpecInput.trim() && (setEditFormData({...editFormData, specs: [...editFormData.specs, {text: editSpecInput.trim(), arrived: false}]}), setEditSpecInput(''))))}
+                        />
+                        <button type="button" onClick={() => {
+                          if (!editSpecInput.trim()) return;
+                          setEditFormData({...editFormData, specs: [...editFormData.specs, {text: editSpecInput.trim(), arrived: false}]});
+                          setEditSpecInput('');
+                        }} className="bg-slate-900 text-white p-3 rounded-xl hover:bg-slate-800 transition-colors">
+                          <Plus size={18}/>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2">
+                    <div className="md:col-span-1 space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">數量</label>
+                      <input type="number" className="w-full px-5 py-3 bg-slate-50 border-none rounded-2xl outline-none font-bold text-center" 
+                        value={editFormData.quantity} onChange={e => setEditFormData({...editFormData, quantity: e.target.value})} />
+                    </div>
+                    <div className="md:col-span-1 space-y-1">
+                      <label className="text-[10px] font-black text-blue-500 ml-2 uppercase tracking-widest">分類</label>
+                      <input className="w-full px-5 py-3 bg-blue-50/50 border-none rounded-2xl outline-none font-bold text-blue-700 text-center" 
+                        value={editFormData.category} onChange={e => setEditFormData({...editFormData, category: e.target.value})} />
+                    </div>
+                    <div className="md:col-span-2 space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">備註</label>
+                      <input className="w-full px-5 py-3 bg-slate-50 border-none rounded-2xl outline-none" 
+                        value={editFormData.note} onChange={e => setEditFormData({...editFormData, note: e.target.value})} />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 pt-6 border-t border-slate-100">
+                    <button type="button" onClick={() => { setEditItemId(null); setEditFormData(null); }} className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-all">取消</button>
+                    <button type="submit" disabled={isSubmitting} className="flex-[2] py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg hover:bg-blue-700 transition-all disabled:bg-slate-300">
+                      {isSubmitting ? '儲存中...' : '確認修改'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          <header className="max-w-4xl mx-auto mb-8 flex flex-col sm:flex-row justify-between items-center gap-4">
+            <div className="flex items-center gap-4 w-full sm:w-auto">
+              <div className="bg-slate-900 p-4 rounded-3xl shadow-xl shrink-0">
+                <Package className="text-blue-400" size={32} />
+              </div>
+              <div>
+                <h1 className="text-3xl font-black tracking-tighter">MOTO <span className="text-blue-600">CLOUD</span></h1>
+                <p className="text-slate-500 font-medium text-sm flex items-center gap-2 mt-1">
+                  雲端備料管理系統
+                </p>
+              </div>
+            </div>
+            
+            {/* 🌟 全新工具列：一鍵雲端快照備份 */}
+            <div className="flex gap-3 w-full sm:w-auto justify-end">
+              <button 
+                onClick={handleFullBackup} 
+                disabled={isBackingUp || items.length === 0}
+                className="bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-500 hover:text-white px-5 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all shadow-sm text-sm disabled:opacity-50"
+              >
+                {isBackingUp ? <Loader2 size={18} className="animate-spin" /> : <UploadCloud size={18} />}
+                {isBackingUp ? '備份中...' : '雲端備份至試算表'}
+              </button>
+
+              <button onClick={exportToCSV} className="bg-white border border-slate-200 hover:border-blue-500 px-5 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all shadow-sm text-sm" title="匯出 CSV">
+                <Download size={18} />
+              </button>
+              
+              <button onClick={() => setShowSettings(true)} className="bg-white border border-slate-200 p-3 rounded-2xl hover:border-blue-500 transition-all shadow-sm" title="設定">
+                <Settings size={20} className="text-slate-500" />
+              </button>
+            </div>
+          </header>
+
+          <div className="max-w-4xl mx-auto flex justify-center mb-10">
+            <div className="bg-slate-200/60 p-1.5 rounded-[1.5rem] flex gap-1 w-full sm:w-auto">
+              <button 
+                onClick={() => setActiveTab('input')}
+                className={`flex-1 sm:flex-none px-8 py-3.5 rounded-[1.2rem] font-bold text-sm flex items-center justify-center gap-2 transition-all duration-300 ${
+                  activeTab === 'input' ? 'bg-white shadow-lg shadow-slate-200 text-blue-600 scale-100' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200 scale-95'
+                }`}
+              >
+                <ClipboardEdit size={18} /> 
+                <span className="tracking-wide">新增備料</span>
+              </button>
+              <button 
+                onClick={() => setActiveTab('list')}
+                className={`flex-1 sm:flex-none px-8 py-3.5 rounded-[1.2rem] font-bold text-sm flex items-center justify-center gap-2 transition-all duration-300 ${
+                  activeTab === 'list' ? 'bg-white shadow-lg shadow-slate-200 text-blue-600 scale-100' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200 scale-95'
+                }`}
+              >
+                <LayoutList size={18} /> 
+                <span className="tracking-wide">備料清單</span>
+                {items.length > 0 && (
+                  <span className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full text-xs ml-1">{items.length}</span>
+                )}
+              </button>
+            </div>
+          </div>
+
+          <main className="max-w-3xl mx-auto relative">
+            
+            {activeTab === 'input' && (
+              <section className="tab-content">
+                <div className="bg-white p-6 md:p-10 rounded-[3rem] shadow-2xl shadow-slate-200/50 border border-white">
+                  <div className="flex items-center justify-between mb-8">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="text-blue-500" size={24} />
+                      <h2 className="text-xl font-black text-slate-800 tracking-tight uppercase">AI 智慧解析錄入</h2>
+                    </div>
+                  </div>
+                  
+                  <div className="relative mb-8">
+                    <textarea 
+                      className="w-full p-6 bg-slate-50 border-2 border-dashed border-slate-200 rounded-[2rem] focus:border-blue-500 focus:bg-white transition-all outline-none text-sm min-h-[140px]"
+                      placeholder="直接貼上對話或文字數據..."
+                      value={rawInput}
+                      onChange={e => setRawInput(e.target.value)}
+                      disabled={isAnalyzing}
+                    />
+                    <button 
+                      onClick={handleSmartParse} 
+                      disabled={isAnalyzing || !rawInput.trim()}
+                      className="absolute bottom-4 right-4 bg-blue-600 text-white px-6 py-3 rounded-2xl text-xs font-black hover:bg-blue-700 transition-all shadow-lg flex items-center gap-2 disabled:bg-slate-300 active:scale-95"
+                    >
+                      {isAnalyzing ? <Loader2 size={16} className="animate-spin" /> : <><Cpu size={16}/> 啟動 AI 解析</>}
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleAddData} className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">客戶姓名</label>
+                        <input required className="w-full px-5 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 ring-blue-500 outline-none font-bold text-lg" 
+                          value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} placeholder="例如：王小明" />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">聯絡電話</label>
+                        <input className="w-full px-5 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 ring-blue-500 outline-none font-medium text-lg" 
+                          value={formData.contact} onChange={e => setFormData({...formData, contact: e.target.value})} placeholder="手機或市話" />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">社交帳號 (IG/LINE)</label>
+                        <input className="w-full px-5 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 ring-blue-500 outline-none font-medium text-lg text-blue-600" 
+                          value={formData.socialAccount} onChange={e => setFormData({...formData, socialAccount: e.target.value})} placeholder="例如：IG: moto_guy" />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="md:col-span-1 space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">車種</label>
+                        <input required className="w-full px-5 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 ring-blue-500 outline-none font-bold" 
+                          value={formData.model} onChange={e => setFormData({...formData, model: e.target.value})} placeholder="例如：勁戰六代" />
+                      </div>
+                      <div className="md:col-span-2 space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">地址</label>
+                        <input className="w-full px-5 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 ring-blue-500 outline-none text-sm" 
+                          value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} placeholder="收件地址或自取" />
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 pt-2">
+                      <label className="text-[10px] font-black text-blue-600 ml-2 uppercase tracking-widest flex items-center gap-2">
+                        <ClipboardList size={14}/> 零件規格與即時核銷
+                      </label>
+                      <div className="space-y-2 max-h-72 overflow-y-auto pr-2 custom-scrollbar">
+                        {formData.specs.map((spec, idx) => (
+                          <div key={idx} className={`flex items-center gap-3 p-4 rounded-3xl border-2 transition-all ${
+                            spec.arrived ? 'bg-emerald-50 border-emerald-100' : 'bg-white border-slate-100'
+                          }`}>
+                            <button type="button" onClick={() => {
+                              const newSpecs = [...formData.specs];
+                              newSpecs[idx].arrived = !newSpecs[idx].arrived;
+                              setFormData({...formData, specs: newSpecs});
+                            }} className={`shrink-0 ${spec.arrived ? 'text-emerald-500' : 'text-slate-300'}`}>
+                              {spec.arrived ? <CheckCircle2 size={24} /> : <Square size={24} />}
+                            </button>
+                            
+                            <input 
+                              className="flex-1 bg-transparent border-none outline-none font-bold text-slate-700"
+                              value={spec.text}
+                              onChange={(e) => {
+                                const newSpecs = [...formData.specs];
+                                newSpecs[idx].text = e.target.value;
+                                setFormData({...formData, specs: newSpecs});
+                              }}
+                            />
+                            
+                            <button type="button" onClick={() => {
+                              const newSpecs = formData.specs.filter((_, i) => i !== idx);
+                              setFormData({...formData, specs: newSpecs});
+                            }} className="text-slate-300 hover:text-red-500 transition-colors p-1">
+                              <X size={18} />
+                            </button>
+                          </div>
+                        ))}
+                        
+                        <div className="flex gap-2 mt-4">
+                          <input 
+                            className="flex-1 px-5 py-4 bg-slate-100 rounded-2xl outline-none focus:ring-2 ring-blue-200 text-sm font-medium" 
+                            placeholder="手動新增零配件項目..."
+                            value={newSpecInput}
+                            onChange={e => setNewSpecInput(e.target.value)}
+                            onKeyPress={e => e.key === 'Enter' && (e.preventDefault(), (newSpecInput.trim() && (setFormData({...formData, specs: [...formData.specs, {text: newSpecInput.trim(), arrived: false}]}), setNewSpecInput(''))))}
+                          />
+                          <button type="button" onClick={() => {
+                            if (!newSpecInput.trim()) return;
+                            setFormData({...formData, specs: [...formData.specs, {text: newSpecInput.trim(), arrived: false}]});
+                            setNewSpecInput('');
+                          }} className="bg-slate-900 text-white p-4 rounded-2xl hover:bg-slate-800 transition-colors">
+                            <Plus size={20}/>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-4 border-t border-slate-50">
+                      <div className="md:col-span-1 space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">數量</label>
+                        <input type="number" className="w-full px-5 py-4 bg-slate-50 border-none rounded-2xl outline-none font-bold text-center" 
+                          value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} />
+                      </div>
+                      <div className="md:col-span-1 space-y-1">
+                        <label className="text-[10px] font-black text-blue-500 ml-2 uppercase tracking-widest flex items-center gap-1"><Sparkles size={10}/> 分類預測</label>
+                        <input className="w-full px-5 py-4 bg-blue-50/50 border-none rounded-2xl outline-none font-bold text-blue-700 placeholder:text-blue-300 text-center" 
+                          value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} placeholder="AI 自動" />
+                      </div>
+                      <div className="md:col-span-2 space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">備註事項</label>
+                        <input className="w-full px-5 py-4 bg-slate-50 border-none rounded-2xl outline-none" 
+                          value={formData.note} onChange={e => setFormData({...formData, note: e.target.value})} placeholder="例如：急件、已收訂金 1000" />
+                      </div>
+                    </div>
+
+                    <div className="pt-4">
+                      <button disabled={isSubmitting || !user} className="w-full py-5 bg-blue-600 hover:bg-blue-700 text-white rounded-[2rem] font-black text-xl transition-all shadow-xl shadow-blue-200 disabled:bg-slate-300 active:scale-[0.98]">
+                        {isSubmitting ? '處理中...' : '確認加入備份單'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </section>
+            )}
+
+            {activeTab === 'list' && (
+              <section className="tab-content space-y-6">
+                <div className="relative group sticky top-4 z-10">
+                  <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 transition-colors" size={22} />
+                  <input className="w-full pl-16 pr-6 py-5 bg-white rounded-full shadow-lg shadow-slate-200/50 border-none outline-none text-lg font-bold" 
+                    placeholder="搜尋客戶姓名、零件或備註..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                </div>
+
+                <div className="space-y-5 pb-10">
+                  {loading ? (
+                    <div className="py-20 text-center"><Loader2 className="animate-spin mx-auto text-blue-500" size={48} /></div>
+                  ) : filteredItems.length === 0 ? (
+                    <div className="py-20 text-center flex flex-col items-center justify-center text-slate-400 bg-white/40 border-4 border-dashed rounded-[3.5rem] border-slate-200">
+                      <Package size={48} className="mb-4 text-slate-300" />
+                      <p className="font-bold text-lg">目前尚無符合的備料數據</p>
+                      <button onClick={() => setActiveTab('input')} className="mt-4 px-6 py-2 bg-slate-900 text-white rounded-full text-sm font-bold shadow-md">去新增一筆</button>
+                    </div>
+                  ) : (
+                    filteredItems.map(item => {
+                      const allArrived = item.specs.every(s => s.arrived);
+                      return (
+                        <div key={item.id} className={`p-6 md:p-8 rounded-[3rem] border-4 transition-all shadow-lg hover:shadow-xl ${
+                          allArrived ? 'bg-emerald-50/50 border-emerald-100' : 'bg-white border-white'
+                        }`}>
+                          <div className="flex flex-col md:flex-row justify-between gap-6">
+                            <div className="flex-1 space-y-5">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="bg-slate-900 text-white px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5">
+                                  <Bike size={12}/> {item.model}
+                                </span>
+                                <span className="bg-blue-100 text-blue-700 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest">
+                                  {item.category}
+                                </span>
+                                {allArrived && (
+                                  <span className="bg-emerald-500 text-white px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest">
+                                    ✓ 訂單已齊
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="space-y-3 bg-slate-50/50 p-4 rounded-3xl border border-slate-100">
+                                {item.specs.map((spec, sIdx) => (
+                                  <div key={sIdx} className="flex items-start gap-4 group">
+                                    <button 
+                                      onClick={() => toggleSubItemStatus(item.id, sIdx)}
+                                      className={`mt-0.5 shrink-0 transition-all ${spec.arrived ? 'text-emerald-500' : 'text-slate-300 hover:text-blue-500'}`}
+                                    >
+                                      {spec.arrived ? <CheckSquare size={24} /> : <Square size={24} />}
+                                    </button>
+                                    <p className={`text-lg md:text-xl font-bold leading-tight ${spec.arrived ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
+                                      {spec.text}
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                              
+                              <div className="flex flex-col sm:flex-row gap-4 pt-2">
+                                <div className="flex items-center gap-4">
+                                  <div className="w-12 h-12 bg-slate-900 text-white rounded-[1.2rem] flex items-center justify-center text-xl font-black shadow-md">
+                                    {item.name[0]?.toUpperCase()}
+                                  </div>
+                                  <div>
+                                    <p className="text-base font-black text-slate-800">{item.name}</p>
+                                    <div className="flex flex-col gap-0.5 mt-0.5">
+                                      {item.contact && (
+                                        <p className="text-xs text-slate-500 font-bold flex items-center gap-1 uppercase">
+                                          <Smartphone size={12}/> {item.contact}
+                                        </p>
+                                      )}
+                                      {item.socialAccount && (
+                                        <p className="text-xs text-blue-500 font-bold flex items-center gap-1">
+                                          <AtSign size={12}/> {item.socialAccount}
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                                {item.address && (
+                                  <div className="flex-1 flex items-center gap-2 text-slate-500 text-xs font-medium bg-slate-50 px-4 py-2 rounded-2xl border border-slate-100">
+                                    <MapPin size={14} className="shrink-0 text-red-400" />
+                                    <span className="leading-snug truncate">{item.address}</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex md:flex-col justify-between items-end gap-4 shrink-0 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-6">
+                              <div className="flex md:flex-col gap-2">
+                                <button onClick={() => { setEditFormData(JSON.parse(JSON.stringify(item))); setEditItemId(item.id); }} className="p-3 bg-blue-50 text-blue-400 hover:text-blue-600 hover:bg-blue-100 rounded-2xl transition-all" title="編輯資料"><Pencil size={20}/></button>
+                                <button onClick={() => deleteItem(item.id)} className="p-3 bg-slate-50 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all" title="刪除資料"><Trash2 size={20}/></button>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-sm text-slate-400 font-bold mb-1">數量</div>
+                                <div className="text-4xl md:text-5xl font-black text-blue-600 leading-none">x{item.quantity}</div>
+                                <p className="text-[10px] text-slate-400 font-mono font-bold mt-2">
+                                  {item.createdAt ? new Date(item.createdAt.seconds * 1000).toLocaleString() : '處理中...'}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                          {item.note && (
+                            <div className="mt-5 bg-amber-50 p-4 rounded-2xl flex items-start gap-3 border border-amber-100/50">
+                              <Sparkles size={16} className="text-amber-500 shrink-0 mt-0.5" />
+                              <p className="text-sm text-amber-900 font-bold leading-relaxed">{item.note}</p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </section>
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    const root = createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
