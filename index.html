@@ -45,14 +45,14 @@
       Sparkles, Smartphone, Bike, MapPin, ClipboardList, Cpu, 
       CheckSquare, Clock, Square, X, Share2, Settings, Link as LinkIcon,
       ClipboardEdit, LayoutList, Pencil, AtSign, Save, RefreshCw, Database, Webhook, Check,
-      UploadCloud, Info
+      UploadCloud, Info, ImagePlus
     } from 'https://esm.sh/lucide-react@0.344.0';
 
     // ==========================================
     // ⚠️ Firebase 設定
     // ==========================================
     let firebaseConfig = {
-      apiKey: "YOUR_API_KEY", 
+      apiKey: "AIzaSyBsqpf9VacP8rzHXSxntd0nNybktVtZdsk", 
       authDomain: "gen-lang-client-0332680269.firebaseapp.com",
       projectId: "gen-lang-client-0332680269",
       storageBucket: "gen-lang-client-0332680269.firebasestorage.app",
@@ -126,6 +126,11 @@
       const [notification, setNotification] = useState(null);
       const [rawInput, setRawInput] = useState('');
       const [showSettings, setShowSettings] = useState(false);
+
+      // 圖片上傳狀態
+      const [selectedImage, setSelectedImage] = useState(null);
+      const [imageMimeType, setImageMimeType] = useState(null);
+      const fileInputRef = useRef(null);
       
       const defaultWebhookUrl = 'https://script.google.com/macros/s/AKfycbxbM15-mcZfiVuAFE3SU8bhd120wYdSroBAxkzw9xYIB4Wa_7dJRNkh6KJ-erL52eszxg/exec';
       const [webhookUrl, setWebhookUrl] = useState(defaultWebhookUrl);
@@ -133,8 +138,6 @@
       const [isTestingWebhook, setIsTestingWebhook] = useState(false);
       const [webhookStatus, setWebhookStatus] = useState('unknown'); 
       const [isSavingConfig, setIsSavingConfig] = useState(false);
-
-      // 新增：快照備份狀態
       const [isBackingUp, setIsBackingUp] = useState(false);
 
       const [editItemId, setEditItemId] = useState(null);
@@ -203,7 +206,6 @@
         return () => unsubscribe();
       }, [user]);
 
-      // 載入 Webhook 設定
       useEffect(() => {
         if (!user) return;
         const fetchConfig = async () => {
@@ -257,7 +259,6 @@
         }
       };
 
-      // 🔥 核心重構：全盤快照備份 (Snapshot Backup)
       const handleFullBackup = async () => {
         if (!webhookUrl) {
           showNotification('請先至設定綁定 Webhook 網址', 'error');
@@ -270,15 +271,13 @@
         showNotification('正在打包資料並覆蓋至試算表...', 'success');
         
         try {
-          // 將當前所有 items 打包成一個完整陣列送出
           await fetch(webhookUrl, {
             method: 'POST',
-            mode: 'no-cors', // 避免跨域阻擋
+            mode: 'no-cors',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
             body: JSON.stringify({ action: 'backup', data: items })
           });
           
-          // 因為 no-cors 無法讀取回傳狀態，這裡延遲一下模擬完成
           setTimeout(() => {
             showNotification('快照備份完成！試算表已更新至最新狀態');
             setIsBackingUp(false);
@@ -290,57 +289,7 @@
       };
 
       const handleCopyGAS = () => {
-        const code = `function doPost(e) {
-  try {
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
-    var payload = JSON.parse(e.postData.contents);
-
-    // 接收全新設計的 'backup' 指令
-    if (payload.action === 'backup') {
-      var items = payload.data;
-      var headers = ["系統ID", "建立時間", "客戶姓名", "車種", "聯繫方式", "社交帳號", "地址", "零件清單", "數量", "分類", "備註"];
-      var rows = [headers];
-
-      // 遍歷所有資料，整理成試算表格式
-      items.forEach(function(item) {
-        var specsStr = "";
-        if (item.specs) {
-          specsStr = item.specs.map(function(s) { 
-            return s.text + (s.arrived ? " [已到]" : " [未到]"); 
-          }).join("\\n");
-        }
-        
-        var timeStr = item.timestampStr || new Date().toLocaleString();
-        if (item.createdAt && item.createdAt.seconds) {
-          timeStr = new Date(item.createdAt.seconds * 1000).toLocaleString();
-        }
-
-        rows.push([
-          item.id || "", timeStr, item.name || "", item.model || "", 
-          item.contact || "", item.socialAccount || "", item.address || "", 
-          specsStr, item.quantity || "1", item.category || "", item.note || ""
-        ]);
-      });
-
-      // 🌟 最關鍵的邏輯：清除舊資料，寫入全新快照！絕對不會重複！
-      sheet.clearContents();
-      if (rows.length > 1) {
-        sheet.getRange(1, 1, rows.length, headers.length).setValues(rows);
-      } else {
-        sheet.getRange(1, 1, 1, headers.length).setValues(rows);
-      }
-
-      return ContentService.createTextOutput("Backup Success");
-    }
-  } catch (error) {
-    return ContentService.createTextOutput("Error: " + error.toString());
-  }
-}
-
-// 保留 doGet 供測試連線使用
-function doGet(e) {
-  return ContentService.createTextOutput("Webhook is running!");
-}`;
+        const code = `function doPost(e) {\n  try {\n    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];\n    var payload = JSON.parse(e.postData.contents);\n\n    if (payload.action === 'backup') {\n      var items = payload.data;\n      var headers = ["系統ID", "建立時間", "客戶姓名", "車種", "聯繫方式", "社交帳號", "地址", "零件清單", "數量", "分類", "備註"];\n      var rows = [headers];\n\n      items.forEach(function(item) {\n        var specsStr = "";\n        if (item.specs) {\n          specsStr = item.specs.map(function(s) { \n            return s.text + (s.arrived ? " [已到]" : " [未到]"); \n          }).join("\\n");\n        }\n        \n        var timeStr = item.timestampStr || new Date().toLocaleString();\n        if (item.createdAt && item.createdAt.seconds) {\n          timeStr = new Date(item.createdAt.seconds * 1000).toLocaleString();\n        }\n\n        rows.push([\n          item.id || "", timeStr, item.name || "", item.model || "", \n          item.contact || "", item.socialAccount || "", item.address || "", \n          specsStr, item.quantity || "1", item.category || "", item.note || ""\n        ]);\n      });\n\n      sheet.clearContents();\n      if (rows.length > 1) {\n        sheet.getRange(1, 1, rows.length, headers.length).setValues(rows);\n      } else {\n        sheet.getRange(1, 1, 1, headers.length).setValues(rows);\n      }\n\n      return ContentService.createTextOutput("Backup Success");\n    }\n  } catch (error) {\n    return ContentService.createTextOutput("Error: " + error.toString());\n  }\n}\n\nfunction doGet(e) {\n  return ContentService.createTextOutput("Webhook is running!");\n}`;
         const textArea = document.createElement("textarea");
         textArea.value = code;
         document.body.appendChild(textArea);
@@ -354,7 +303,32 @@ function doGet(e) {
         document.body.removeChild(textArea);
       };
 
-      const callGeminiWithRetry = async (prompt, historyContext, retries = 5, delay = 1000) => {
+      const handleImageUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        if (file.size > 5 * 1024 * 1024) {
+          showNotification('圖片大小不能超過 5MB', 'error');
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64String = reader.result;
+          setSelectedImage(base64String.split(',')[1]);
+          setImageMimeType(file.type);
+        };
+        reader.readAsDataURL(file);
+      };
+
+      const handleRemoveImage = () => {
+        setSelectedImage(null);
+        setImageMimeType(null);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      };
+
+      // 更新版：支援圖文混合識別的 Gemini API
+      const callGeminiWithRetry = async (prompt, historyContext, imageBase64 = null, imgMimeType = null, retries = 5, delay = 1000) => {
         const systemPrompt = `你是一個專業的機車零件助手。請提取資訊並返回 JSON 格式：
         {
           "name": "姓名",
@@ -373,6 +347,18 @@ function doGet(e) {
         ${historyContext || '暫無歷史紀錄'}
         `;
 
+        const parts = [{ text: prompt }];
+        
+        // 若有圖片，則附加上去
+        if (imageBase64 && imgMimeType) {
+          parts.push({
+            inlineData: {
+              mimeType: imgMimeType,
+              data: imageBase64
+            }
+          });
+        }
+
         for (let i = 0; i < retries; i++) {
           try {
             const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
@@ -381,7 +367,7 @@ function doGet(e) {
                 'Content-Type': 'application/json'
               },
               body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }],
+                contents: [{ role: "user", parts: parts }],
                 systemInstruction: { parts: [{ text: systemPrompt }] },
                 generationConfig: { responseMimeType: "application/json" }
               })
@@ -403,7 +389,7 @@ function doGet(e) {
       };
 
       const handleSmartParse = async () => {
-        if (!rawInput.trim()) return;
+        if (!rawInput.trim() && !selectedImage) return;
         setIsAnalyzing(true);
         try {
           const historyMappings = new Set();
@@ -416,7 +402,11 @@ function doGet(e) {
           });
           const historyContext = Array.from(historyMappings).slice(0, 60).join('\n');
 
-          const parsedData = await callGeminiWithRetry(rawInput, historyContext);
+          // 若沒有輸入文字，給予一個預設的分析提示
+          const promptText = rawInput.trim() || "請分析這張圖片中的估價單、報價單或對話內容，並提取其中的機車零件清單及客戶資訊。";
+
+          const parsedData = await callGeminiWithRetry(promptText, historyContext, selectedImage, imageMimeType);
+          
           setFormData({
             ...formData,
             name: parsedData.name || '',
@@ -429,8 +419,10 @@ function doGet(e) {
             category: parsedData.category || '',
             note: parsedData.note || ''
           });
+          
           setRawInput('');
-          showNotification('AI 解析完成！已應用歷史分類經驗');
+          handleRemoveImage();
+          showNotification('AI 解析完成！已自動填入表單');
         } catch (error) {
           showNotification(error.message || '解析失敗', 'error');
         } finally {
@@ -443,7 +435,6 @@ function doGet(e) {
         setTimeout(() => setNotification(null), 3000);
       };
 
-      // 移除原有的 auto-sync 呼叫，完全交給 Firebase 管理
       const handleAddData = async (e) => {
         e.preventDefault();
         if (!user || isSubmitting) return;
@@ -558,7 +549,6 @@ function doGet(e) {
                 </div>
 
                 <div className="p-8 overflow-y-auto custom-scrollbar flex-1 space-y-8">
-                  {/* Section 1: Webhook Binding */}
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
                       <h3 className="text-sm font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
@@ -604,7 +594,6 @@ function doGet(e) {
                     </div>
                   </div>
 
-                  {/* Section 2: Fix Duplicates (GAS Code) */}
                   <div className="space-y-4 pt-6 border-t border-slate-100">
                     <h3 className="text-sm font-black text-amber-600 uppercase tracking-widest flex items-center gap-2">
                       <Wrench size={16} /> 試算表端接收程式碼
@@ -807,7 +796,6 @@ function doGet(e) {
               </div>
             </div>
             
-            {/* 🌟 全新工具列：一鍵雲端快照備份 */}
             <div className="flex gap-3 w-full sm:w-auto justify-end">
               <button 
                 onClick={handleFullBackup} 
@@ -862,25 +850,70 @@ function doGet(e) {
                   <div className="flex items-center justify-between mb-8">
                     <div className="flex items-center gap-2">
                       <Sparkles className="text-blue-500" size={24} />
-                      <h2 className="text-xl font-black text-slate-800 tracking-tight uppercase">AI 智慧解析錄入</h2>
+                      <h2 className="text-xl font-black text-slate-800 tracking-tight uppercase">AI 智慧圖文解析</h2>
                     </div>
                   </div>
                   
-                  <div className="relative mb-8">
-                    <textarea 
-                      className="w-full p-6 bg-slate-50 border-2 border-dashed border-slate-200 rounded-[2rem] focus:border-blue-500 focus:bg-white transition-all outline-none text-sm min-h-[140px]"
-                      placeholder="直接貼上對話或文字數據..."
-                      value={rawInput}
-                      onChange={e => setRawInput(e.target.value)}
-                      disabled={isAnalyzing}
-                    />
-                    <button 
-                      onClick={handleSmartParse} 
-                      disabled={isAnalyzing || !rawInput.trim()}
-                      className="absolute bottom-4 right-4 bg-blue-600 text-white px-6 py-3 rounded-2xl text-xs font-black hover:bg-blue-700 transition-all shadow-lg flex items-center gap-2 disabled:bg-slate-300 active:scale-95"
-                    >
-                      {isAnalyzing ? <Loader2 size={16} className="animate-spin" /> : <><Cpu size={16}/> 啟動 AI 解析</>}
-                    </button>
+                  <div className="mb-8">
+                    <div className="relative">
+                      <textarea 
+                        className="w-full p-5 sm:p-6 pb-20 sm:pb-20 bg-slate-50 border-2 border-dashed border-slate-200 rounded-[2rem] focus:border-blue-500 focus:bg-white transition-all outline-none text-sm min-h-[160px] resize-none"
+                        placeholder="直接貼上對話、文字數據... 或上傳估價單/報價單截圖交由 AI 解析"
+                        value={rawInput}
+                        onChange={e => setRawInput(e.target.value)}
+                        disabled={isAnalyzing}
+                      />
+                      
+                      <div className="absolute bottom-4 left-4 right-4 flex justify-between items-center gap-2">
+                        <input 
+                          type="file" 
+                          accept="image/*" 
+                          className="hidden" 
+                          ref={fileInputRef} 
+                          onChange={handleImageUpload} 
+                          disabled={isAnalyzing}
+                        />
+                        <button 
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="bg-white text-slate-600 border border-slate-200 px-3 py-2.5 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl text-[11px] sm:text-xs font-bold hover:bg-slate-50 transition-all shadow-sm flex items-center gap-1.5 sm:gap-2 disabled:opacity-50 whitespace-nowrap"
+                          disabled={isAnalyzing}
+                        >
+                          <ImagePlus size={16} className={selectedImage ? "text-blue-500" : ""} /> 
+                          <span>{selectedImage ? '更換圖片' : '上傳圖片分析'}</span>
+                        </button>
+
+                        <button 
+                          type="button"
+                          onClick={handleSmartParse} 
+                          disabled={isAnalyzing || (!rawInput.trim() && !selectedImage)}
+                          className="bg-blue-600 text-white px-4 py-2.5 sm:px-6 sm:py-3 rounded-xl sm:rounded-2xl text-[11px] sm:text-xs font-black hover:bg-blue-700 transition-all shadow-lg flex items-center gap-1.5 sm:gap-2 disabled:bg-slate-300 active:scale-95 whitespace-nowrap"
+                        >
+                          {isAnalyzing ? <Loader2 size={16} className="animate-spin" /> : <Cpu size={16}/>} 
+                          <span>啟動 AI 解析</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {selectedImage && (
+                      <div className="mt-3 bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4 inline-flex animate-in fade-in slide-in-from-top-2">
+                        <div className="w-14 h-14 rounded-xl overflow-hidden shrink-0 border border-slate-100">
+                          <img src={`data:${imageMimeType};base64,${selectedImage}`} alt="預覽" className="w-full h-full object-cover" />
+                        </div>
+                        <div className="flex flex-col pr-4">
+                          <span className="text-sm font-bold text-slate-700">已附加圖片</span>
+                          <span className="text-xs text-slate-400">將與文字一併送出分析</span>
+                        </div>
+                        <button 
+                          type="button" 
+                          onClick={handleRemoveImage} 
+                          className="ml-auto p-2 bg-slate-50 hover:bg-red-50 hover:text-red-500 rounded-full text-slate-400 transition-colors"
+                          disabled={isAnalyzing}
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   <form onSubmit={handleAddData} className="space-y-6">
